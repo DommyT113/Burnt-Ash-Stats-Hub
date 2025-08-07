@@ -1,0 +1,841 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Burnt Ash - Stats Hub</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/heatmapjs@2.0.2/heatmap.min.js"></script>
+    <style>
+        :root {
+            --club-blue-dark: #0A192F; --club-blue-light: #1F2937; --club-red: #d90429;
+            --green: #22c55e; --red: #ef4444; --indigo: #4f46e5; --light-grey: #E2E8F0;
+        }
+        html { scroll-behavior: smooth; }
+        html, body { height: 100%; overflow: hidden; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif; background-color: var(--club-blue-dark); color: var(--light-grey); }
+        .panel { background-color: var(--club-blue-light); border: 1px solid #374151; border-radius: 0.5rem; }
+        .btn { transition: all 0.2s; } .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .filter-btn.active { background-color: var(--indigo); } 
+        .tab-btn.active { border-color: var(--indigo); background-color: #374151; }
+        .game-item:has(input:checked) { background-color: #4338ca; }
+        
+        .pitch-transform-layer { width: 100%; height: 100%; transform-origin: center center; transition: transform 0.1s; position: absolute; inset: 0; }
+        .pitch-orientation-container { position: relative; width: 100%; height: 100%; transition: transform 0.3s ease-in-out; transform-origin: center center; }
+        .pitch-orientation-container.is-vertical { transform: rotate(90deg) scale(var(--vertical-scale, 0.7)); }
+        .interactive-pitch-container { cursor: grab; }
+        .interactive-pitch-container.panning { cursor: grabbing; }
+
+        .pitch-svg-layer { position: absolute; inset: 0; z-index: 1; }
+        .heatmap-container, .performance-grid-overlay { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
+        .pitch-dots-overlay { position: absolute; inset: 0; z-index: 3; }
+        .pitch-dot { position: absolute; transform: translate(-50%, -50%); border: 1px solid rgba(0,0,0,0.6); box-shadow: 0 0 6px rgba(0,0,0,0.6); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; color: white; text-shadow: 1px 1px 2px black; line-height: 1; cursor: pointer; }
+        .performance-grid-cell { position: absolute; box-sizing: border-box; border: 1px solid rgba(255, 255, 255, 0.05); cursor: pointer;}
+
+        .momentum-bar-container { background-color: #374151; border-radius: 6px; height: 16px; width: 100%; overflow: hidden; position: relative; }
+        .momentum-bar-fill { height: 100%; transition: width 0.3s ease-out; }
+        .momentum-bar-text { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: bold; color: white; text-shadow: 1px 1px 2px rgba(0,0,0,0.7); }
+        
+        .modal { transition: opacity 0.2s ease-in-out; }
+        .modal-content { transition: transform 0.2s ease-in-out; }
+        
+        .widget-item { background-color: #374151; padding: 0.5rem 0.75rem; border-radius: 0.375rem; display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.5rem; cursor: grab; }
+        .widget-item:active { cursor: grabbing; }
+        .widget-item.dragging { opacity: 0.5; }
+        .drop-zone { background-color: #0A192F; border: 2px dashed #374151; min-height: 10rem; padding: 0.5rem; border-radius: 0.5rem; }
+        .drop-zone.over { border-color: var(--indigo); background-color: rgba(79, 70, 229, 0.1); }
+        .map-control-btn.active, .heatmap-filter-btn.active { background-color: var(--indigo); }
+        .dashboard-grid { display: grid; gap: 1rem; }
+        .dashboard-widget { background-color: #0A192F; border: 1px solid #374151; border-radius: 0.5rem; padding: 1rem; display: flex; flex-direction: column; }
+    </style>
+</head>
+<body class="p-4 flex flex-col h-screen">
+    <!-- Main UI -->
+    <header class="flex-shrink-0 flex items-center justify-between mb-4">
+        <h1 class="text-2xl font-bold text-white">Burnt Ash HC - Stats Hub</h1>
+        <div class="flex items-center gap-4">
+            <div id="status-indicator" class="text-sm text-gray-400">Loading...</div>
+            <button id="manageDashboardsBtn" class="btn text-sm bg-indigo-600 hover:bg-indigo-700 py-1 px-3 rounded-lg" disabled>Manage Dashboards</button>
+        </div>
+    </header>
+    <div class="flex-grow grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4 min-h-0">
+        <div class="md:col-span-1 lg:col-span-1 panel p-4 flex flex-col gap-4">
+            <div class="flex-shrink-0">
+                <h2 class="font-bold text-lg mb-2">1. Load Games & Videos</h2>
+                <input type="file" id="jsonUpload" accept="application/json" multiple class="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:font-semibold file:bg-slate-300 file:text-slate-700 hover:file:bg-slate-200"/>
+                <input type="file" id="videoLinkUpload" accept="video/*" class="hidden">
+            </div>
+            <div class="flex-shrink-0"><h2 class="font-bold text-lg mb-2">2. Filter by Team</h2><div id="team-filter" class="grid grid-cols-2 gap-1 text-sm text-center"></div></div>
+            <div class="flex-shrink-0">
+                <div class="flex justify-between items-center mb-2">
+                    <h2 class="font-bold text-lg">3. Select Games</h2>
+                    <button id="selectAllBtn" class="btn text-xs bg-indigo-700 hover:bg-indigo-600 py-1 px-2 rounded-md">Select / Deselect All</button>
+                </div>
+                <p class="text-xs text-gray-400 -mt-2 mb-2">Select, link video, and flip attack direction.</p>
+            </div>
+            <div id="game-list-container" class="flex-grow min-h-0 overflow-y-auto pr-2 space-y-2"></div>
+            <div class="flex-shrink-0 space-y-2"><button id="clearDataBtn" class="w-full text-center text-sm py-2 bg-red-800 hover:bg-red-700 rounded-lg btn" disabled>Clear Selected Games</button></div>
+            <div class="flex-shrink-0"><h2 class="font-bold text-lg mb-2">4. Filter by Period</h2><div id="period-filter" class="grid grid-cols-4 gap-1 text-sm text-center"><button data-period="all" class="filter-btn p-2 rounded-md bg-gray-600 hover:bg-gray-700 active">All</button><button data-period="1H" class="filter-btn p-2 rounded-md bg-gray-600 hover:bg-gray-700">1H</button><button data-period="2H" class="filter-btn p-2 rounded-md bg-gray-600 hover:bg-gray-700">2H</button><button data-period="Q1" class="filter-btn p-2 rounded-md bg-gray-600 hover:bg-gray-700">Q1</button><button data-period="Q2" class="filter-btn p-2 rounded-md bg-gray-600 hover:bg-gray-700">Q2</button><button data-period="Q3" class="filter-btn p-2 rounded-md bg-gray-600 hover:bg-gray-700">Q3</button><button data-period="Q4" class="filter-btn p-2 rounded-md bg-gray-600 hover:bg-gray-700">Q4</button></div></div>
+        </div>
+        <div id="dashboard-container" class="md:col-span-2 lg:col-span-3 panel p-4 flex flex-col min-h-0">
+            <div id="welcome-screen" class="m-auto text-center text-gray-400"><h2 class="text-2xl font-bold text-white mb-2">Welcome to the Stats Hub</h2><p>Upload game JSON files to begin analysis.</p></div>
+            <div id="main-dashboard" class="hidden h-full flex flex-col">
+                <div class="flex justify-between items-center mb-3 flex-shrink-0 flex-wrap gap-2">
+                    <h2 id="dashboard-title" class="text-xl font-bold"></h2>
+                    <div class="flex items-center gap-4">
+                        <select id="player-filter" class="bg-gray-700 border border-gray-600 rounded-md p-2 text-sm hidden"></select>
+                        <select id="dashboard-selector" class="bg-gray-700 border border-gray-600 rounded-md p-2 text-sm"></select>
+                    </div>
+                </div>
+                <div id="dashboard-content" class="flex-grow overflow-y-auto">
+                    <!-- Dashboard content will be dynamically rendered here -->
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Modals -->
+    <div id="clipPlayerModal" class="modal fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center p-4 z-50 hidden" style="backdrop-filter: blur(4px);"><div class="modal-content bg-gray-800 text-white p-6 rounded-lg shadow-2xl w-full max-w-6xl scale-95 opacity-0 flex flex-col max-h-[95vh]"><div class="flex justify-between items-center mb-4 flex-shrink-0"><h2 id="clip-modal-title" class="text-2xl font-bold">Event Clips</h2><button class="close-modal-btn text-2xl hover:text-red-500">&times;</button></div><div class="flex-grow grid grid-cols-1 md:grid-cols-3 gap-6 min-h-0"><div class="md:col-span-2 flex flex-col"><video id="clip-video-player" class="w-full h-full object-contain bg-black rounded-lg min-h-0" controls></video><div id="clip-video-info" class="text-sm text-gray-400 mt-2">No clip selected.</div></div><div class="md:col-span-1 flex flex-col min-h-0"><h3 class="font-bold text-lg mb-2">Matching Events</h3><div id="clip-list" class="flex-grow overflow-y-auto space-y-2 p-2 bg-gray-900 rounded-md"></div></div></div></div></div>
+    
+    <div id="dashboardManagerModal" class="modal fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center p-4 z-50 hidden" style="backdrop-filter: blur(4px);"><div class="modal-content bg-gray-800 text-white p-6 rounded-lg shadow-2xl w-full max-w-7xl scale-95 opacity-0 flex flex-col max-h-[95vh]"><div class="flex justify-between items-center mb-4 flex-shrink-0"><h2 class="text-2xl font-bold">Dashboard Manager</h2><button class="close-modal-btn text-2xl hover:text-red-500">&times;</button></div><div class="flex-grow grid grid-cols-1 md:grid-cols-3 gap-6 min-h-0"><div class="md:col-span-1 flex flex-col min-h-0"><h3 class="font-bold text-lg mb-2">Available Widgets</h3><p class="text-xs text-gray-400 mb-2">Drag widgets to the layout area.</p><div id="available-widgets-list" class="flex-grow overflow-y-auto space-y-2 p-2 bg-gray-900 rounded-md"></div></div><div class="md:col-span-2 flex flex-col"><div class="flex justify-between items-center mb-2 flex-wrap gap-2"><div class="flex items-center gap-2"><label for="dashboardNameInput" class="text-sm">Dashboard Name:</label><input type="text" id="dashboardNameInput" class="bg-gray-700 p-1 rounded-md text-sm"><label class="text-sm ml-2">Columns:</label><select id="dashboardColumnsInput" class="bg-gray-700 p-1 rounded-md text-sm"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option></select><button id="saveDashboardLayoutBtn" class="btn bg-green-600 text-sm px-3 py-1 rounded-md">Save</button></div><div class="flex items-center gap-2"><button id="deleteDashboardBtn" class="btn bg-red-800 text-sm px-3 py-1 rounded-md">Delete This Dashboard</button><button id="addNewDashboardBtn" class="btn bg-blue-600 text-sm px-3 py-1 rounded-md">New Dashboard</button></div></div><div id="dashboard-layout-area" class="drop-zone flex-grow space-y-2 overflow-y-auto"></div></div></div></div></div>
+
+    <div id="quickSyncModal" class="modal fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center p-4 z-50 hidden" style="backdrop-filter: blur(4px);"><div class="modal-content bg-gray-800 text-white p-6 rounded-lg shadow-2xl w-full max-w-4xl scale-95 opacity-0"><div class="flex justify-between items-center mb-4"><h2 class="text-xl font-bold">Quick Video Sync</h2><button class="close-modal-btn text-2xl hover:text-red-500">&times;</button></div><p class="text-sm text-gray-400 mb-4">This game file is missing sync data. Please set the start times for each half to enable clip playback.</p><video id="quick-sync-video" class="w-full h-auto bg-black rounded-lg mb-2" controls></video><p class="text-center font-mono text-lg mb-4">Current Time: <span id="quick-sync-time" class="text-yellow-400">00:00.00</span></p><div class="grid grid-cols-2 gap-4"><div class="text-center"><button id="quick-sync-set-1h" class="btn bg-indigo-600 w-full py-2 rounded-md">Set 1st Half Start</button><p id="quick-sync-1h-display" class="mt-1 text-sm text-gray-400">Not Set</p></div><div class="text-center"><button id="quick-sync-set-2h" class="btn bg-indigo-600 w-full py-2 rounded-md">Set 2nd Half Start</button><p id="quick-sync-2h-display" class="mt-1 text-sm text-gray-400">Not Set</p></div></div><div class="mt-6 text-right"><button id="quick-sync-save" class="btn bg-green-600 px-6 py-2 rounded-md" disabled>Save Sync & Play Clip</button></div></div></div>
+
+    <script>
+    document.addEventListener('DOMContentLoaded', () => {
+        let allGamesData = []; let selectedGameIds = new Set(); let currentTeamFilter = 'all'; let currentPeriodFilter = 'all'; let currentPlayerFilter = 'all';
+        let mapStates = {};
+        let kpisWithPlotsOrder = [];
+        const STORAGE_KEY = 'burntAshStatsHubData';
+        const DASHBOARD_STORAGE_KEY = 'burntAshDashboardLayouts';
+        let videoFileMap = new Map();
+        let dashboards = [];
+        let currentDashboardId = 'default';
+        let editingDashboard = null;
+        let quickSyncState = { gameId: null, resolve: null, reject: null, firstHalf: null, secondHalf: null };
+
+        let masterKpiSettings = null;
+        let kpiNames = {};
+        let TARGETS = {};
+
+        const PITCH_SVG_MARKUP = `<svg width="100%" height="100%" viewBox="0 0 914 550" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg"><rect width="914" height="550" fill="transparent"/><g stroke="white" stroke-width="2" fill="none"><rect x="0" y="0" width="914" height="550"/><line x1="457" y1="0" x2="457" y2="550"/><line x1="229" y1="0" x2="229" y2="550"/><line x1="685" y1="0" x2="685" y2="550"/><rect x="-12" y="256.7" width="12" height="36.6" stroke-width="2"/><rect x="914" y="256.7" width="12" height="36.6" stroke-width="2"/><path d="M 0 128.7 A 146.3 146.3 0 0 1 146.3 275 L 146.3 275 M 146.3 275 L 146.3 275" /><path d="M 146.3 256.7 L 146.3 293.3 M 0 128.7 A 146.3 146.3 0 0 1 146.3 256.7 M 0 421.3 A 146.3 146.3 0 0 0 146.3 293.3" /><circle cx="64" cy="275" r="2.5" fill="white"/><path d="M 914 128.7 A 146.3 146.3 0 0 0 767.7 275 M 767.7 275 L 767.7 275" /><path d="M 767.7 256.7 L 767.7 293.3 M 914 128.7 A 146.3 146.3 0 0 0 767.7 256.7 M 914 421.3 A 146.3 146.3 0 0 1 767.7 293.3"/><circle cx="850" cy="275" r="2.5" fill="white"/></g></svg>`;
+        
+        const ui = {
+            jsonUpload: document.getElementById('jsonUpload'), gameListContainer: document.getElementById('game-list-container'), clearDataBtn: document.getElementById('clearDataBtn'),
+            teamFilter: document.getElementById('team-filter'), periodFilter: document.getElementById('period-filter'), dashboardContainer: document.getElementById('dashboard-container'),
+            welcomeScreen: document.getElementById('welcome-screen'), mainDashboard: document.getElementById('main-dashboard'), dashboardTitle: document.getElementById('dashboard-title'),
+            statusIndicator: document.getElementById('status-indicator'),
+            dashboardContent: document.getElementById('dashboard-content'),
+            clipPlayerModal: document.getElementById('clipPlayerModal'),
+            manageDashboardsBtn: document.getElementById('manageDashboardsBtn'),
+            dashboardManagerModal: document.getElementById('dashboardManagerModal'),
+            dashboardSelector: document.getElementById('dashboard-selector'),
+            availableWidgetsList: document.getElementById('available-widgets-list'),
+            dashboardLayoutArea: document.getElementById('dashboard-layout-area'),
+            dashboardNameInput: document.getElementById('dashboardNameInput'),
+            dashboardColumnsInput: document.getElementById('dashboardColumnsInput'),
+            saveDashboardLayoutBtn: document.getElementById('saveDashboardLayoutBtn'),
+            addNewDashboardBtn: document.getElementById('addNewDashboardBtn'),
+            deleteDashboardBtn: document.getElementById('deleteDashboardBtn'),
+            quickSyncModal: document.getElementById('quickSyncModal'),
+            selectAllBtn: document.getElementById('selectAllBtn'),
+            playerFilter: document.getElementById('player-filter'),
+        };
+        
+        const timeToSeconds = (str) => { if (!str || !str.includes(':')) return 0; const p = str.split(':').map(Number); return (p.length > 1) ? (p[0] * 60) + p[1] : p[0]; };
+        
+        function loadFromStorage() {
+            const storedData = localStorage.getItem(STORAGE_KEY);
+            if (storedData) {
+                try {
+                    allGamesData = JSON.parse(storedData);
+                } catch (e) {
+                    allGamesData = [];
+                }
+            }
+            refreshUI();
+            if(allGamesData.length > 0) ui.manageDashboardsBtn.disabled = false;
+        }
+
+        function saveToStorage() { localStorage.setItem(STORAGE_KEY, JSON.stringify(allGamesData)); ui.statusIndicator.textContent = `${allGamesData.length} games loaded.`; }
+        function loadDashboards() { const s = localStorage.getItem(DASHBOARD_STORAGE_KEY); dashboards = s ? JSON.parse(s) : []; }
+        function saveDashboards() { localStorage.setItem(DASHBOARD_STORAGE_KEY, JSON.stringify(dashboards)); }
+        
+        function refreshUI() {
+            updateMasterKpiSettings();
+            saveToStorage();
+            renderTeamFilter();
+            renderGameList();
+            updateDashboard();
+        }
+
+        function updateMasterKpiSettings() {
+            if (allGamesData.length === 0) {
+                masterKpiSettings = null;
+                kpiNames = {};
+                TARGETS = {};
+                return;
+            }
+
+            const latestGame = allGamesData.reduce((latest, current) => {
+                const latestDate = new Date(latest.gameDetails.savedAt || 0);
+                const currentDate = new Date(current.gameDetails.savedAt || 0);
+                return currentDate > latestDate ? current : latest;
+            });
+
+            setMasterKpiSettings(latestGame.kpiSettings);
+        }
+
+        function setMasterKpiSettings(kpiSettingsArray) {
+            masterKpiSettings = kpiSettingsArray;
+            kpiNames = {};
+            TARGETS = {};
+            if (masterKpiSettings) {
+                masterKpiSettings.forEach(kpi => {
+                    kpiNames[kpi.key] = kpi.name;
+                    if (kpi.target) {
+                        TARGETS[kpi.key] = kpi.target;
+                    }
+                });
+            }
+        }
+
+        function handleFileUpload(event) {
+            const selectedFiles = Array.from(event.target.files);
+            if (selectedFiles.length === 0) return;
+
+            const existingFilenames = new Set(allGamesData.map(g => g.gameDetails._uploadedFileName));
+            const filesToProcess = selectedFiles.filter(file => {
+                if (existingFilenames.has(file.name)) {
+                    console.log(`Skipping already loaded file: ${file.name}`);
+                    return false;
+                }
+                return true;
+            });
+
+            if (filesToProcess.length === 0) {
+                alert("All selected files have already been loaded.");
+                event.target.value = '';
+                return;
+            }
+
+            let loadedCount = 0;
+            let successfulLoads = 0;
+            const newGames = [];
+            const failedFiles = [];
+
+            filesToProcess.forEach(file => {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    try {
+                        const parsedJson = JSON.parse(e.target.result);
+                        
+                        const data = parsedJson.gameData ? parsedJson.gameData : parsedJson;
+                        const syncData = parsedJson.sync || null;
+
+                        if (data && data.gameDetails && Array.isArray(data.events)) {
+                            if (typeof data.gameDetails.attackDirection === 'undefined') {
+                                data.gameDetails.attackDirection = 'right';
+                            }
+                            data.gameDetails._uploadedFileName = file.name; 
+                            data.id = file.name + '_' + Date.now();
+                            if (syncData) {
+                                data.sync = syncData;
+                            }
+                            newGames.push(data);
+                            successfulLoads++;
+                        } else {
+                           throw new Error("Missing 'gameDetails' or 'events' array.");
+                        }
+                    } catch (err) {
+                        console.error(`Error processing file: ${file.name}`, err);
+                        failedFiles.push({ name: file.name, error: err.message });
+                    }
+                    
+                    loadedCount++;
+                    if (loadedCount === filesToProcess.length) {
+                        if (newGames.length > 0) {
+                            allGamesData.push(...newGames);
+                            allGamesData.sort((a, b) => new Date(b.gameDetails.savedAt) - new Date(a.gameDetails.savedAt));
+                            refreshUI();
+                            ui.manageDashboardsBtn.disabled = false;
+                        }
+
+                        let summaryMessage = `${successfulLoads} out of ${filesToProcess.length} new file(s) loaded successfully.`;
+                        if (failedFiles.length > 0) {
+                            summaryMessage += `\n\nThe following files failed to load:\n` +
+                                failedFiles.map(f => `- ${f.name} (${f.error})`).join('\n');
+                        }
+                        alert(summaryMessage);
+                    }
+                };
+
+                reader.onerror = () => {
+                    console.error(`Could not read file: ${file.name}`);
+                    failedFiles.push({ name: file.name, error: "Could not be read by the browser." });
+                    
+                    loadedCount++;
+                    if (loadedCount === filesToProcess.length) {
+                        if (newGames.length > 0) {
+                             allGamesData.push(...newGames);
+                             refreshUI();
+                        }
+                        let summaryMessage = `${successfulLoads} out of ${filesToProcess.length} new file(s) loaded successfully.`;
+                        if (failedFiles.length > 0) {
+                            summaryMessage += `\n\nThe following files failed to load:\n` +
+                                failedFiles.map(f => `- ${f.name} (${f.error})`).join('\n');
+                        }
+                        alert(summaryMessage);
+                    }
+                };
+                reader.readAsText(file);
+            });
+            event.target.value = '';
+        }
+
+        function getFilteredEvents(period = currentPeriodFilter) {
+            if (selectedGameIds.size === 0) return [];
+            let events = [];
+            const selectedGames = allGamesData.filter(g => selectedGameIds.has(g.id));
+            
+            selectedGames.forEach(game => {
+                let gameEvents = game.events;
+
+                if (currentPlayerFilter !== 'all') {
+                    gameEvents = gameEvents.filter(e => e.player === currentPlayerFilter);
+                }
+
+                const halfTimeMarker = gameEvents.find(e => e.label === "End of 1st Half");
+                const fullTimeMarker = gameEvents.find(e => e.label === "Full Time");
+                const secondHalfStartMarker = gameEvents.find(e => e.label === "Start of 2nd Half");
+                const gameLengthMins = game.gameDetails?.gameLength || 70;
+                const halfTimeS = halfTimeMarker ? timeToSeconds(halfTimeMarker.time) : (gameLengthMins / 2) * 60;
+                const fullTimeS = fullTimeMarker ? timeToSeconds(fullTimeMarker.time) : gameLengthMins * 60;
+                const secondHalfStartS = secondHalfStartMarker ? timeToSeconds(secondHalfStartMarker.time) : halfTimeS;
+                
+                let min = 0, max = fullTimeS;
+                switch(period) {
+                    case 'all': break;
+                    case '1H': max = halfTimeS; break;
+                    case '2H': min = secondHalfStartS; break;
+                    case 'Q1': max = halfTimeS / 2; break;
+                    case 'Q2': min = halfTimeS / 2; max = halfTimeS; break;
+                    case 'Q3': min = secondHalfStartS; max = secondHalfStartS + ((fullTimeS - secondHalfStartS) / 2); break;
+                    case 'Q4': min = secondHalfStartS + ((fullTimeS - secondHalfStartS) / 2); break;
+                }
+                
+                const filteredGameEvents = gameEvents.filter(e => {
+                    const eventTimeS = timeToSeconds(e.time);
+                    return e.metric !== 'marker' && eventTimeS >= min && eventTimeS <= max;
+                });
+                
+                filteredGameEvents.forEach(e => e.parentGame = game);
+                events.push(...filteredGameEvents);
+            });
+            
+            return events;
+        }
+
+        function getNormalizedEvents(period = currentPeriodFilter) {
+            const events = getFilteredEvents(period);
+            return events.map(e => {
+                const parentGame = e.parentGame || allGamesData.find(g => selectedGameIds.has(g.id));
+                const coordsArray = Array.isArray(e.mapCoords) ? e.mapCoords : (e.mapCoords ? [e.mapCoords] : []);
+                const normalizedCoords = coordsArray.map(coords => {
+                    if (parentGame?.gameDetails?.attackDirection === 'left' && coords) {
+                        return { x: 100 - coords.x, y: 100 - coords.y };
+                    }
+                    return coords;
+                }).filter(Boolean);
+                return { ...e, mapCoords: normalizedCoords[0], allMapCoords: normalizedCoords };
+            });
+        }
+        
+        function calculateXG(coords) { if (!coords) return 0; const x = coords.x; const y = coords.y; if (x < 84) return 0.01; let xg = 0.05; if (Math.abs(x - 100) < 5) xg += 0.2; else if (Math.abs(x - 100) < 10) xg += 0.1; if (Math.abs(y - 50) > 15) xg *= 0.5; else if (Math.abs(y - 50) > 8) xg *= 0.8; return Math.min(xg, 0.95); }
+        
+        function calculateStats(events) {
+            const stats = { kpiStats: {}, subTypeStats: {} };
+            let totalXG = 0;
+            const allKpiKeys = new Set(events.map(e => e.metric));
+            Object.keys(kpiNames).forEach(k => allKpiKeys.add(k));
+
+            allKpiKeys.forEach(key => {
+                const metricEvents = events.filter(e => e.metric === key);
+                if (metricEvents.length === 0) return;
+                const successCount = metricEvents.filter(e => ['success', 'good', 'goal'].includes(e.type)).length;
+                const totalCount = metricEvents.length;
+                const percentage = totalCount > 0 ? (successCount / totalCount * 100) : 0;
+                stats.kpiStats[key] = { successCount, totalCount, percentage };
+            });
+
+            const shotAndGoalEvents = events.filter(e => e.subType === 'Shot' || e.subType === 'Goal');
+            shotAndGoalEvents.forEach(shot => { totalXG += calculateXG(shot.mapCoords); });
+            stats.kpiStats.xG = { total: totalXG, count: shotAndGoalEvents.length };
+            stats.kpiStats.goals = { totalCount: events.filter(e => e.subType === 'Goal').length };
+            
+            if (masterKpiSettings) {
+                masterKpiSettings.forEach(kpi => {
+                    if (kpi.hasSubTypes && Array.isArray(kpi.subTypes) && kpi.subTypes.length > 0) {
+                        const kpiEvents = events.filter(e => e.metric === kpi.key);
+                        if (kpiEvents.length > 0) {
+                            stats.subTypeStats[kpi.key] = {};
+                            kpi.subTypes.forEach(subType => {
+                                const subTypeEvents = kpiEvents.filter(e => e.subType === subType);
+                                if (subTypeEvents.length > 0) {
+                                    const good = subTypeEvents.filter(e => ['success', 'good', 'goal'].includes(e.type)).length;
+                                    const bad = subTypeEvents.length - good;
+                                    stats.subTypeStats[kpi.key][subType] = { good, bad, total: subTypeEvents.length };
+                                }
+                            });
+                        }
+                    }
+                });
+            }
+            return stats;
+        }
+
+        function renderTeamFilter() { const teams = [...new Set(allGamesData.map(g => g.gameDetails.team).filter(Boolean))].sort(); let buttonsHTML = `<button data-team="all" class="filter-btn p-2 rounded-md bg-gray-600 hover:bg-gray-700 ${currentTeamFilter === 'all' ? 'active' : ''}">All Teams</button>`; buttonsHTML += teams.map(team => `<button data-team="${team}" class="filter-btn p-2 rounded-md bg-gray-600 hover:bg-gray-700 ${currentTeamFilter === team ? 'active' : ''}">${team}</button>`).join(''); ui.teamFilter.innerHTML = buttonsHTML; }
+        
+        function renderGameList() {
+            const gamesToDisplay = (currentTeamFilter === 'all') ? allGamesData : allGamesData.filter(g => g.gameDetails.team === currentTeamFilter);
+            if (gamesToDisplay.length === 0) { ui.gameListContainer.innerHTML = `<p class="text-center text-gray-400 text-sm mt-4">No games loaded for ${currentTeamFilter}.</p>`; return; }
+            ui.gameListContainer.innerHTML = gamesToDisplay.map(game => {
+                const teamName = game.gameDetails?.team ? `<span class="font-normal text-indigo-400">(${game.gameDetails.team})</span>` : '';
+                const opponentName = game.gameDetails?.opponent || 'Unknown Opponent';
+                const fileIdentifier = game.gameDetails._uploadedFileName.includes('_edited') ? '<span class="text-xs text-yellow-400 ml-2">(Edited)</span>' : '';
+                const direction = game.gameDetails.attackDirection || 'right';
+                const directionText = direction === 'right' ? 'Att →' : '← Att';
+                const directionTitle = `Flip attacking direction (current: ${direction})`;
+                const videoLinked = videoFileMap.has(game.id);
+                const videoButtonText = videoLinked ? '🎥 Linked' : '➕ Link Video';
+                const videoButtonClass = videoLinked ? 'bg-green-700' : 'bg-blue-700';
+                return `<div class="game-item text-sm p-2 rounded-md bg-gray-700 hover:bg-gray-600 flex items-center gap-2">
+                            <label class="flex-grow flex items-center cursor-pointer">
+                                <input type="checkbox" data-id="${game.id}" class="mr-3 h-4 w-4 rounded bg-gray-800 border-gray-600 text-indigo-600 focus:ring-indigo-500">
+                                <div class="flex-grow">
+                                    <div><span class="font-bold text-white">${opponentName}</span> ${teamName} ${fileIdentifier}</div>
+                                    <span class="block text-xs text-gray-400">${new Date(game.gameDetails.savedAt).toLocaleDateString()}</span>
+                                </div>
+                            </label>
+                            <div class="flex-shrink-0 flex flex-col gap-1">
+                                <button class="link-video-btn text-xs px-2 py-1 rounded-md ${videoButtonClass} hover:opacity-80" data-id="${game.id}">${videoButtonText}</button>
+                                <button class="toggle-direction-btn text-xs px-2 py-1 rounded-md bg-slate-600 hover:bg-slate-500" data-id="${game.id}" title="${directionTitle}">
+                                    ↔ <span class="font-mono">${directionText}</span>
+                                </button>
+                            </div>
+                        </div>`;
+            }).join('');
+            ui.gameListContainer.querySelectorAll('input[type="checkbox"]').forEach(cb => { cb.checked = selectedGameIds.has(cb.dataset.id); cb.addEventListener('change', (e) => { if (e.target.checked) { selectedGameIds.add(e.target.dataset.id); } else { selectedGameIds.delete(e.target.dataset.id); } updateDashboard(); }); });
+        }
+        
+        function renderPlayerFilter() {
+            const baseEvents = getFilteredEvents('all'); 
+            const players = [...new Set(baseEvents.map(e => e.player).filter(Boolean))].sort();
+            
+            if (players.length > 0) {
+                ui.playerFilter.classList.remove('hidden');
+                let options = `<option value="all">All Players</option>`;
+                options += players.map(p => `<option value="${p}" ${currentPlayerFilter === p ? 'selected' : ''}>${p}</option>`).join('');
+                ui.playerFilter.innerHTML = options;
+            } else {
+                ui.playerFilter.classList.add('hidden');
+            }
+        }
+
+        function updateDashboard(filterChange = false) {
+            ui.clearDataBtn.disabled = selectedGameIds.size === 0;
+            const hasSelection = selectedGameIds.size > 0;
+            ui.welcomeScreen.classList.toggle('hidden', hasSelection); ui.mainDashboard.classList.toggle('hidden', !hasSelection);
+            if (hasSelection) {
+                const selectedGames = allGamesData.filter(g => selectedGameIds.has(g.id));
+                const title = selectedGames.map(g => g.gameDetails.opponent).join(' & ');
+                ui.dashboardTitle.textContent = `Analysis for: ${title}`;
+                
+                if (!filterChange) {
+                    currentPlayerFilter = 'all'; 
+                }
+                renderPlayerFilter();
+
+                if (!filterChange) {
+                    const allPeriodEvents = getNormalizedEvents('all');
+                    kpisWithPlotsOrder = [...new Set(allPeriodEvents.flatMap(e => e.allMapCoords.length > 0 ? [e.metric] : []))];
+                    initializeAllMapStates(selectedGames.length === 1 ? selectedGames[0] : null);
+                }
+                renderDashboardSelector(); 
+                renderCurrentDashboard();
+            } else {
+                 ui.playerFilter.classList.add('hidden');
+            }
+        }
+        
+        function renderDashboardSelector() { const options = [{ id: 'default', name: 'Default Dashboard' }, ...dashboards]; ui.dashboardSelector.innerHTML = options.map(d => `<option value="${d.id}" ${d.id === currentDashboardId ? 'selected' : ''}>${d.name}</option>`).join(''); }
+
+        function renderCurrentDashboard() {
+            let layout;
+            if (currentDashboardId === 'default') {
+                layout = { id: 'default', name: 'Default Dashboard', columns: 2, widgets: [ { type: 'summary' }, { type: 'timeline' }, { type: 'momentum', config: { metric: 'outlet' } }, { type: 'momentum', config: { metric: 'press' } }, ...kpisWithPlotsOrder.map(kpiKey => ({ type: 'map', config: { kpiKey } })) ] };
+            } else { layout = dashboards.find(d => d.id === currentDashboardId); }
+            if (!layout) { ui.dashboardContent.innerHTML = `<p class="text-red-500">Error: Could not load dashboard layout.</p>`; return; }
+            
+            const events = getFilteredEvents();
+            const stats = calculateStats(events);
+            ui.dashboardContent.innerHTML = '';
+            
+            const grid = document.createElement('div'); grid.className = 'dashboard-grid'; grid.style.gridTemplateColumns = `repeat(${layout.columns || 2}, minmax(0, 1fr))`;
+            ui.dashboardContent.appendChild(grid);
+            
+            layout.widgets.forEach(widget => { const widgetEl = document.createElement('div'); widgetEl.className = 'dashboard-widget'; grid.appendChild(widgetEl); if (widget.type === 'summary') { renderSummaryWidget(widgetEl, stats); } else if (widget.type === 'momentum') { renderMomentumWidget(widgetEl, events, widget.config.metric); } else if (widget.type === 'map') { renderMapWidget(widgetEl, widget.config.kpiKey, widget.config.subType); } else if (widget.type === 'timeline') { renderTimelineWidget(widgetEl); } });
+            layout.widgets.filter(w => w.type === 'map').forEach(widget => renderInteractiveMapContent(widget.config.kpiKey, widget.config.subType));
+        }
+
+        function renderSummaryWidget(container, stats) {
+            const kpiStats = stats.kpiStats;
+            const subTypeStats = stats.subTypeStats;
+            container.innerHTML = `<h3 class="font-bold text-xl mb-2 text-indigo-300">KPI Summary</h3>`; const summaryGrid = document.createElement('div'); summaryGrid.className = 'grid grid-cols-2 sm:grid-cols-3 gap-3';
+            let summaryHtml = Object.keys(kpiStats).filter(key => kpiStats[key] && typeof kpiStats[key].percentage !== 'undefined')
+                .map(key => {
+                    const data = kpiStats[key];
+                    const target = TARGETS[key];
+                    let colorClass = 'text-indigo-400';
+                    if (data.totalCount > 0 && typeof target !== 'undefined') {
+                        colorClass = data.percentage >= target ? 'text-green-400' : 'text-red-400';
+                    }
+                    return `<div class="panel p-2 text-center">
+                                <div class="text-xs text-gray-400">${kpiNames[key] || key}</div>
+                                <div class="text-xl font-bold ${colorClass}">${data.percentage.toFixed(0)}%</div>
+                                <div class="text-xs text-gray-400">${data.successCount}/${data.totalCount}</div>
+                            </div>`;
+                }).join('');
+            if (kpiStats.xG) { summaryHtml += `<div class="panel p-2 text-center"><div class="text-xs text-gray-400">Expected Goals (xG)</div><div class="text-xl font-bold text-indigo-400">${kpiStats.xG.total.toFixed(2)}</div><div class="text-xs text-gray-400">${kpiStats.xG.count || 0} shot attempts</div></div>`; }
+            if (kpiStats.goals) { summaryHtml += `<div class="panel p-2 text-center"><div class="text-xs text-gray-400">Goals</div><div class="text-xl font-bold text-green-400">${kpiStats.goals.totalCount}</div><div class="text-xs text-gray-400">&nbsp;</div></div>`; }
+            summaryGrid.innerHTML = summaryHtml || '<p class="text-gray-400 col-span-full text-center">No data for this period.</p>';
+            
+            if (subTypeStats && Object.keys(subTypeStats).length > 0) {
+                const breakdownContainer = document.createElement('div');
+                breakdownContainer.className = 'mt-6 col-span-full';
+                let breakdownHtml = `<h4 class="font-bold text-lg mb-2 text-indigo-300">Sub-Type Breakdown</h4>`;
+                
+                Object.keys(subTypeStats).forEach(kpiKey => {
+                    const subTypes = subTypeStats[kpiKey];
+                    const kpiName = kpiNames[kpiKey] || kpiKey;
+                    if (Object.keys(subTypes).length > 0) {
+                        breakdownHtml += `<div class="mb-3"><h5 class="font-semibold text-sm text-gray-300">${kpiName}</h5><ul class="list-disc list-inside text-xs text-gray-400 space-y-1 mt-1">`;
+                        Object.keys(subTypes).sort((a,b) => subTypes[b].total - subTypes[a].total).forEach(subTypeKey => {
+                            const counts = subTypes[subTypeKey];
+                            breakdownHtml += `<li>${subTypeKey} (${counts.total}): <span class="text-green-400 font-semibold">${counts.good} Good</span> / <span class="text-red-400 font-semibold">${counts.bad} Bad</span></li>`;
+                        });
+                        breakdownHtml += `</ul></div>`;
+                    }
+                });
+                breakdownContainer.innerHTML = breakdownHtml;
+                summaryGrid.appendChild(breakdownContainer);
+            }
+
+            container.appendChild(summaryGrid);
+        }
+
+        function renderMomentumWidget(container, events, metric) {
+            let html = `<div><h3 class="font-bold text-xl mb-2 text-indigo-300">${kpiNames[metric] || metric} Momentum</h3>`; 
+            const metricEvents = events.filter(e => e.metric === metric); 
+            if (metricEvents.length === 0) { container.innerHTML = html + `<p class="text-gray-400 text-sm">No events for this period.</p></div>`; return; } 
+            const MOMENTUM_BLOCK_SIZE = 5; 
+            for (let i = 0; i < metricEvents.length; i += MOMENTUM_BLOCK_SIZE) { const blockEvents = metricEvents.slice(i, i + MOMENTUM_BLOCK_SIZE); const successCount = blockEvents.filter(e => ['success','good','goal'].includes(e.type)).length; const target = TARGETS[metric] || 0; const percentage = blockEvents.length > 0 ? (successCount / blockEvents.length * 100) : 0; const barColor = percentage >= target ? 'var(--green)' : 'var(--red)'; html += `<p class="text-xs text-gray-300 mt-2">Attempts ${i+1}-${i+MOMENTUM_BLOCK_SIZE}</p><div class="momentum-bar-container"><div class="momentum-bar-fill" style="width: ${percentage}%; background-color: ${barColor};"></div><div class="momentum-bar-text">${percentage.toFixed(0)}% (${successCount}/${blockEvents.length})</div></div>`; }
+            container.innerHTML = html + '</div>';
+        }
+
+        function renderTimelineWidget(container) {
+            container.innerHTML = `<h3 class="font-bold text-xl mb-4 text-indigo-300">Game Timeline</h3>`;
+            if (selectedGameIds.size !== 1) {
+                container.innerHTML += `<p class="text-gray-400 text-sm m-auto text-center">Please select exactly one game to view its timeline.</p>`;
+                return;
+            }
+
+            const game = allGamesData.find(g => selectedGameIds.has(g.id));
+            const gameLength = game.gameDetails.gameLength || 70;
+            const events = game.events;
+
+            const timelineWrapper = document.createElement('div');
+            timelineWrapper.className = "flex-grow flex flex-col justify-center";
+            
+            let timelineHtml = `<div class="w-full h-2 bg-gray-600 rounded-full relative flex items-center">`;
+            
+            timelineHtml += `<div class="absolute h-4 w-0.5 bg-gray-400" style="left: 50%;"></div>`;
+
+            events.forEach(event => {
+                const eventTime = timeToSeconds(event.time);
+                const percent = (eventTime / (gameLength * 60)) * 100;
+                let color = '';
+                let title = `${event.time} - `;
+                let size = 'w-3 h-3';
+
+                if(event.subType === 'Goal') {
+                    color = 'bg-green-400 border-2 border-white';
+                    title += `Goal`;
+                    size = 'w-4 h-4 z-10';
+                } else if (event.metric === 'pc_att') {
+                    color = 'bg-blue-500';
+                    title += `PC For`;
+                } else if (event.metric === 'pc_def') {
+                    color = 'bg-red-500';
+                    title += `PC Against`;
+                }
+                
+                if (color) {
+                    timelineHtml += `<div class="absolute rounded-full ${size} ${color}" style="left: ${percent}%; transform: translateX(-50%);" title="${title}"></div>`;
+                }
+            });
+
+            timelineHtml += `</div><div class="flex justify-between text-xs text-gray-400 mt-2 px-1"><p>0'</p><p>${gameLength / 2}'</p><p>${gameLength}'</p></div>`;
+
+            timelineWrapper.innerHTML = timelineHtml;
+            container.appendChild(timelineWrapper);
+
+            const legendHtml = `<div class="flex justify-center items-center gap-4 mt-4 text-xs">
+                <div class="flex items-center gap-2"><div class="w-3 h-3 rounded-full bg-green-400 border-2 border-white"></div><span>Goal</span></div>
+                <div class="flex items-center gap-2"><div class="w-3 h-3 rounded-full bg-blue-500"></div><span>PC For</span></div>
+                <div class="flex items-center gap-2"><div class="w-3 h-3 rounded-full bg-red-500"></div><span>PC Against</span></div>
+            </div>`;
+            container.innerHTML += legendHtml;
+        }
+
+        function renderMapWidget(container, kpiKey, subType = null) {
+             const mapId = subType ? `${kpiKey}-${subType}` : kpiKey;
+             let title = kpiNames[kpiKey] || kpiKey;
+             if(subType) {
+                title += ` (${subType}s)`;
+             }
+             title += ' Map';
+             const controlsHTML = `<div class="absolute top-1 right-1 flex gap-1 bg-gray-900/50 p-1 rounded-md z-10"><button data-action="toggle-view" title="Toggle Map View (Dots/Heatmap/Performance)" class="btn map-control-btn bg-gray-700 w-7 h-7 rounded text-xs">🗺️</button><button data-action="rotate" title="Rotate" class="btn bg-gray-700 w-7 h-7 rounded text-xs">🔄</button><button data-action="zoom-in" title="Zoom In" class="btn bg-gray-700 w-7 h-7 rounded text-xs">➕</button><button data-action="zoom-out" title="Zoom Out" class="btn bg-gray-700 w-7 h-7 rounded text-xs">➖</button><button data-action="reset" title="Reset View" class="btn bg-gray-700 w-7 h-7 rounded text-xs">↩️</button></div>
+                <div class="heatmap-controls absolute top-1 left-1 flex gap-1 bg-gray-900/50 p-1 rounded-md z-10" style="display: none;"><button data-action="set-heatmap-filter" data-filter="all" class="btn heatmap-filter-btn text-xs px-2 py-0.5 rounded-md bg-gray-700">All</button><button data-action="set-heatmap-filter" data-filter="good" class="btn heatmap-filter-btn text-xs px-2 py-0.5 rounded-md bg-gray-700">Good</button><button data-action="set-heatmap-filter" data-filter="bad" class="btn heatmap-filter-btn text-xs px-2 py-0.5 rounded-md bg-gray-700">Bad</button></div>`;
+            const mapHTML = `<div class="mb-2" data-map-id="${mapId}" data-kpi-key="${kpiKey}" data-sub-type="${subType || ''}"><h3 class="font-bold text-xl text-indigo-300 mb-2">${title}</h3><div class="interactive-pitch-container panel p-2 bg-black rounded-lg relative">${controlsHTML}<div class="pitch-aspect-box relative w-full aspect-[914/550] overflow-hidden"><div class="pitch-orientation-container"><div class="pitch-transform-layer"><div class="pitch-svg-layer">${PITCH_SVG_MARKUP}</div><div class="heatmap-container"></div><div class="performance-grid-overlay"></div><div class="pitch-dots-overlay"></div></div></div></div></div></div>`;
+            container.innerHTML = mapHTML;
+        }
+
+        function initializeAllMapStates(singleGameData) {
+            mapStates = {};
+        }
+        
+        function renderInteractiveMapContent(kpiKey, subType = null) {
+            const mapId = subType ? `${kpiKey}-${subType}` : kpiKey;
+            const mapWidget = document.querySelector(`.dashboard-widget [data-map-id="${mapId}"]`);
+            if (!mapWidget) return;
+            
+            if(!mapStates[mapId]) {
+                mapStates[mapId] = { transform: { scale: 1, x_norm: 0, y_norm: 0 }, isVertical: false, viewMode: 'dots', heatmapFilter: 'all' };
+            }
+
+            const state = mapStates[mapId]; const aspectBox = mapWidget.querySelector('.pitch-aspect-box'); const orientationContainer = mapWidget.querySelector('.pitch-orientation-container'); const transformLayer = mapWidget.querySelector('.pitch-transform-layer'); const dotsOverlay = mapWidget.querySelector('.pitch-dots-overlay'); const heatmapContainer = mapWidget.querySelector('.heatmap-container'); const performanceGridOverlay = mapWidget.querySelector('.performance-grid-overlay'); const heatmapControls = mapWidget.querySelector('.heatmap-controls'); const rect = aspectBox.getBoundingClientRect();
+            
+            let currentX = (state.transform.x_norm || 0) * rect.width; let currentY = (state.transform.y_norm || 0) * rect.height;
+            orientationContainer.classList.toggle('is-vertical', state.isVertical); if (state.isVertical) { const containerAspectRatio = aspectBox.clientHeight / aspectBox.clientWidth; orientationContainer.style.setProperty('--vertical-scale', containerAspectRatio); }
+            transformLayer.style.transform = `translate(${currentX}px, ${currentY}px) scale(${state.transform.scale || 1})`;
+            
+            let kpiEvents = getNormalizedEvents().filter(e => e.metric === kpiKey && e.allMapCoords && e.allMapCoords.length > 0);
+            if(subType) {
+                kpiEvents = kpiEvents.filter(e => e.subType === subType);
+            }
+            const primaryGame = selectedGameIds.size === 1 ? allGamesData.find(g => selectedGameIds.has(g.id)) : null;
+            
+            dotsOverlay.style.display = state.viewMode === 'dots' ? 'block' : 'none'; heatmapContainer.style.display = state.viewMode === 'heatmap' ? 'block' : 'none'; performanceGridOverlay.style.display = state.viewMode === 'performance' ? 'block' : 'none'; heatmapControls.style.display = state.viewMode === 'heatmap' ? 'flex' : 'none';
+            if (state.viewMode === 'dots') {
+                dotsOverlay.innerHTML = kpiEvents.length === 0 ? `<div class="absolute inset-0 flex items-center justify-center text-gray-500 bg-black/30">No plotted data for this period</div>`
+                    : kpiEvents.flatMap(e => {
+                        const kpi = primaryGame?.kpiSettings?.find(k => k.key === e.metric) || masterKpiSettings?.find(k => k.key === e.metric);
+                        const displaySettings = kpi?.display || {}; let dotColor = displaySettings.negativeColor || '#ef4444'; if (['success', 'good', 'goal'].includes(e.type)) dotColor = displaySettings.positiveColor || '#22c55e'; const dotSize = displaySettings.size || 22; const abbr = displaySettings.abbr || e.metric.substring(0, 1).toUpperCase(); const textTransform = state.isVertical ? 'transform: rotate(-90deg);' : '';
+                        return e.allMapCoords.map(coords => `<div class="pitch-dot" style="left:${coords.x}%; top:${coords.y}%; width:${dotSize}px; height:${dotSize}px; font-size:${dotSize * 0.45}px; background-color: ${dotColor};" title="[${e.parentGame.gameDetails.opponent}] - ${e.type}"><span style="${textTransform}">${abbr}</span></div>`);
+                    }).join('');
+            } else if (state.viewMode === 'heatmap') {
+                 heatmapControls.querySelectorAll('.heatmap-filter-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.filter === state.heatmapFilter)); heatmapContainer.innerHTML = ''; state.heatmapInstance = h337.create({ container: heatmapContainer }); if (rect.width <= 0) return; let eventsToMap, gradient = null; const goodGradient = { '0.4': '#22c55e', '1.0': '#15803d' }; const badGradient = { '0.4': '#ef4444', '1.0': '#b91c1c' };
+                switch(state.heatmapFilter) { case 'good': eventsToMap = kpiEvents.filter(e => ['success', 'good', 'goal'].includes(e.type)); gradient = goodGradient; break; case 'bad': eventsToMap = kpiEvents.filter(e => ['fail', 'bad', 'no goal'].includes(e.type)); gradient = badGradient; break; default: eventsToMap = kpiEvents; break; }
+                const radius = (state.isVertical ? rect.height : rect.width) * 0.05 / state.transform.scale; state.heatmapInstance.configure({ radius: Math.max(10, radius), maxOpacity: .6, minOpacity: 0, blur: .75, gradient: gradient }); state.heatmapInstance._renderer.setDimensions(rect.width, rect.height);
+                const dataPoints = eventsToMap.flatMap(e => e.allMapCoords.map(coords => ({ x: Math.round(coords.x / 100 * rect.width), y: Math.round(coords.y / 100 * rect.height), value: 1 }))); state.heatmapInstance.setData({ max: Math.max(1, Math.ceil(dataPoints.length / 10)), data: dataPoints });
+            } else if (state.viewMode === 'performance') {
+                performanceGridOverlay.innerHTML = ''; if (kpiEvents.length === 0) return; const GRID_COLS = 20; const GRID_ROWS = 12; const grid = Array(GRID_COLS).fill(null).map(() => Array(GRID_ROWS).fill(null).map(() => ({ good: 0, bad: 0 }))); let maxDensity = 0;
+                kpiEvents.forEach(e => { e.allMapCoords.forEach(coords => { const col = Math.floor(coords.x / (100 / GRID_COLS)); const row = Math.floor(coords.y / (100 / GRID_ROWS)); if (grid[col] && grid[col][row]) { if (['success', 'good', 'goal'].includes(e.type)) { grid[col][row].good++; } else { grid[col][row].bad++; } const density = grid[col][row].good + grid[col][row].bad; if (density > maxDensity) maxDensity = density; } }); }); if (maxDensity === 0) return;
+                for(let c = 0; c < GRID_COLS; c++) { for(let r = 0; r < GRID_ROWS; r++) { const cellData = grid[c][r]; const density = cellData.good + cellData.bad; if (density === 0) continue; const performanceRatio = cellData.good / density; const hue = performanceRatio * 120; const color = `hsl(${hue}, 90%, 50%)`; const opacity = 0.15 + 0.85 * (density / maxDensity); const cell = document.createElement('div'); cell.className = 'performance-grid-cell'; cell.style.left = `${c * (100 / GRID_COLS)}%`; cell.style.top = `${r * (100 / GRID_ROWS)}%`; cell.style.width = `${100 / GRID_COLS}%`; cell.style.height = `${100 / GRID_ROWS}%`; cell.style.backgroundColor = color; cell.style.opacity = opacity; cell.title = `Good: ${cellData.good}, Bad: ${cellData.bad} (Total: ${density})`; performanceGridOverlay.appendChild(cell); } }
+            }
+        }
+        
+        function toggleModal(modal, show) { const modalContent = modal.querySelector('.modal-content'); if (show) { modal.classList.remove('hidden'); setTimeout(() => { modal.classList.add('flex'); modalContent.classList.remove('scale-95', 'opacity-0'); }, 10); } else { modalContent.classList.add('scale-95', 'opacity-0'); setTimeout(() => { modal.classList.add('hidden'); modal.classList.remove('flex'); }, 200); } }
+        
+        function getSyncedTime(event, gameData) {
+            if (!event || !gameData.sync) return 0; const eventTimeSecs = timeToSeconds(event.time); const halfTimeMarker = gameData.events.find(ev => ev.label === "End of 1st Half"); const halfTimeLoggerTime = halfTimeMarker ? timeToSeconds(halfTimeMarker.time) : (gameData.gameDetails.gameLength / 2 * 60); const isFirstHalf = eventTimeSecs <= halfTimeLoggerTime; if (isFirstHalf) { return (gameData.sync.firstHalfOffset || 0) + eventTimeSecs; } else { const timeIntoSecondHalf = eventTimeSecs - halfTimeLoggerTime; return (gameData.sync.secondHalfOffset || 0) + timeIntoSecondHalf; }
+        }
+
+        function startQuickSync(gameId) {
+            return new Promise((resolve, reject) => {
+                const game = allGamesData.find(g => g.id === gameId); const video = videoFileMap.get(gameId); if (!game || !video) { reject("Game or video not found for quick sync."); return; }
+                quickSyncState = { gameId, resolve, reject, firstHalf: null, secondHalf: null };
+                const videoPlayer = document.getElementById('quick-sync-video'); const timeDisplay = document.getElementById('quick-sync-time');
+                videoPlayer.src = URL.createObjectURL(video);
+                videoPlayer.ontimeupdate = () => { const sec = videoPlayer.currentTime; const minutes = Math.floor(sec / 60); const seconds = Math.floor(sec % 60); const milliseconds = Math.floor((sec - Math.floor(sec)) * 100); timeDisplay.textContent = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}.${String(milliseconds).padStart(2, '0')}`; };
+                document.getElementById('quick-sync-1h-display').textContent = 'Not Set'; document.getElementById('quick-sync-2h-display').textContent = 'Not Set'; document.getElementById('quick-sync-save').disabled = true;
+                toggleModal(ui.quickSyncModal, true);
+            });
+        }
+
+        async function playClip(eventToPlay) {
+            const game = eventToPlay.parentGame; const videoFile = videoFileMap.get(game.id); if (!videoFile) { alert("Video for this game is not linked."); return; }
+            if (!game.sync) { try { await startQuickSync(game.id); } catch (error) { alert(`Sync cancelled or failed: ${error}`); return; } }
+            const videoPlayer = document.getElementById('clip-video-player'); const currentVideoName = videoPlayer.dataset.currentVideoName;
+            if (currentVideoName !== videoFile.name) { videoPlayer.src = URL.createObjectURL(videoFile); videoPlayer.dataset.currentVideoName = videoFile.name; }
+            const syncedTime = getSyncedTime(eventToPlay, game); const preroll = eventToPlay.preroll || 0;
+            videoPlayer.currentTime = Math.max(0, syncedTime - preroll); videoPlayer.play();
+            document.getElementById('clip-video-info').textContent = `Playing clip from game vs ${game.gameDetails.opponent} at ${eventToPlay.time}.`;
+        }
+
+        async function findAndShowClips(kpiKey, subType, coords) {
+            const CLICK_RADIUS = 5; 
+            let allRelevantEvents = getNormalizedEvents().filter(e => e.metric === kpiKey && e.allMapCoords && e.allMapCoords.some(c => { const dx = c.x - coords.x; const dy = c.y - coords.y; return (dx * dx + dy * dy) < (CLICK_RADIUS * CLICK_RADIUS); }));
+            if(subType) {
+                allRelevantEvents = allRelevantEvents.filter(e => e.subType === subType);
+            }
+            const eventsWithVideo = allRelevantEvents.filter(e => videoFileMap.has(e.parentGame.id));
+            if (eventsWithVideo.length === 0) { alert("No linked video clips found in this area."); return; }
+            const clipListEl = document.getElementById('clip-list');
+            clipListEl.innerHTML = eventsWithVideo.map((event, index) => { const game = event.parentGame; const kpi = game.kpiSettings?.find(k => k.key === event.metric); const outcome = ['success', 'good', 'goal'].includes(event.type) ? (kpi?.success || 'Good') : (kpi?.fail || 'Bad'); return `<div class="p-2 bg-gray-700 rounded-md cursor-pointer hover:bg-indigo-700 clip-item" data-index="${index}"><div class="font-bold text-sm">${game.gameDetails.opponent} - ${outcome}</div><div class="text-xs text-gray-400">Time: ${event.time}</div></div>`; }).join('');
+            document.getElementById('clip-modal-title').textContent = `${kpiNames[kpiKey] || kpiKey} Clips`; document.getElementById('clip-video-info').textContent = "Select a clip to play."; document.getElementById('clip-video-player').src = '';
+            clipListEl.onclick = async (e) => { const item = e.target.closest('.clip-item'); if (!item) return; const eventIndex = parseInt(item.dataset.index, 10); const eventToPlay = eventsWithVideo[eventIndex]; await playClip(eventToPlay); };
+            toggleModal(ui.clipPlayerModal, true);
+        }
+
+        function openDashboardManager() {
+            populateAvailableWidgets();
+            const idToLoad = dashboards.find(d => d.id === currentDashboardId) ? currentDashboardId : (dashboards.length > 0 ? dashboards[0].id : null);
+            if (idToLoad) { loadDashboardForEditing(idToLoad); } else { startNewDashboard(); }
+            toggleModal(ui.dashboardManagerModal, true);
+        }
+
+        function populateAvailableWidgets() {
+            let html = `<div class="widget-item" draggable="true" data-type="summary">📊 Summary Cards</div>`;
+            html += `<div class="widget-item" draggable="true" data-type="timeline">⏳ Game Timeline</div>`;
+            html += `<hr class="border-gray-600 my-2">`;
+            html += `<div class="widget-item" draggable="true" data-type="momentum" data-kpi="outlet">📈 Outlet Momentum</div>`;
+            html += `<div class="widget-item" draggable="true" data-type="momentum" data-kpi="press">📉 Press Momentum</div>`;
+             html += `<hr class="border-gray-600 my-2">`;
+            kpisWithPlotsOrder.forEach(kpiKey => {
+                html += `<div class="widget-item" draggable="true" data-type="map" data-kpi="${kpiKey}">🗺️ ${kpiNames[kpiKey] || kpiKey} Map</div>`;
+            });
+            html += `<hr class="border-gray-600 my-2">`;
+            html += `<div class="widget-item" draggable="true" data-type="map" data-kpi="circle_possession" data-sub-type="Shot">🎯 Shot Map</div>`;
+            html += `<div class="widget-item" draggable="true" data-type="map" data-kpi="circle_possession" data-sub-type="Goal">⚽ Goal Map</div>`;
+            ui.availableWidgetsList.innerHTML = html;
+        }
+
+        function startNewDashboard() {
+            editingDashboard = { id: `custom_${Date.now()}`, name: "New Dashboard", columns: 2, widgets: [] };
+            ui.dashboardNameInput.value = editingDashboard.name;
+            ui.dashboardColumnsInput.value = editingDashboard.columns;
+            ui.deleteDashboardBtn.style.display = 'none';
+            ui.dashboardLayoutArea.innerHTML = '';
+        }
+
+        function loadDashboardForEditing(id) {
+            const dashboard = dashboards.find(d => d.id === id); if (!dashboard) { startNewDashboard(); return; }
+            editingDashboard = JSON.parse(JSON.stringify(dashboard));
+            ui.dashboardNameInput.value = editingDashboard.name; ui.dashboardColumnsInput.value = editingDashboard.columns || 2; ui.deleteDashboardBtn.style.display = 'block';
+            ui.dashboardLayoutArea.innerHTML = editingDashboard.widgets.map(w => {
+                let name = w.type.charAt(0).toUpperCase() + w.type.slice(1);
+                const kpi = w.config?.kpiKey || w.config?.metric;
+                const subType = w.config?.subType;
+                let displayName = kpiNames[kpi] || kpi;
+                if (subType) {
+                    displayName = `${subType}`;
+                }
+                if (w.type === 'map') name = `🗺️ ${displayName} Map`;
+                else if (w.type === 'momentum') name = `📈 ${displayName} Momentum`;
+                else if (w.type === 'summary') name = `📊 Summary`;
+                else if (w.type === 'timeline') name = `⏳ Game Timeline`;
+
+                return `<div class="widget-item" draggable="true" data-type="${w.type}" data-kpi="${kpi || ''}" data-sub-type="${subType || ''}">${name} <button class="ml-auto text-red-500 remove-widget-btn">×</button></div>`;
+            }).join('');
+        }
+
+        function saveCurrentDashboardLayout() {
+            if (!editingDashboard) return;
+            editingDashboard.name = ui.dashboardNameInput.value.trim() || 'Untitled Dashboard';
+            editingDashboard.columns = parseInt(ui.dashboardColumnsInput.value, 10);
+            editingDashboard.widgets = [...ui.dashboardLayoutArea.querySelectorAll('.widget-item')].map(el => {
+                const config = { 
+                    kpiKey: el.dataset.kpi, 
+                    metric: el.dataset.kpi,
+                };
+                if (el.dataset.subType) {
+                    config.subType = el.dataset.subType;
+                }
+                return { type: el.dataset.type, config };
+            });
+            const existingIndex = dashboards.findIndex(d => d.id === editingDashboard.id);
+            if (existingIndex > -1) { dashboards[existingIndex] = editingDashboard; } else { dashboards.push(editingDashboard); }
+            saveDashboards(); currentDashboardId = editingDashboard.id; renderDashboardSelector(); alert(`Dashboard "${editingDashboard.name}" saved!`);
+        }
+
+        function handleClipPlayerShortcuts(e) {
+            if (ui.clipPlayerModal.classList.contains('hidden')) return;
+            const videoPlayer = document.getElementById('clip-video-player');
+            if (!videoPlayer || document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA') return;
+
+            switch (e.code) {
+                case 'Space': e.preventDefault(); videoPlayer.paused ? videoPlayer.play() : videoPlayer.pause(); break;
+                case 'KeyJ': e.preventDefault(); videoPlayer.currentTime = Math.max(0, videoPlayer.currentTime - (e.shiftKey ? 0.04 : 1)); break;
+                case 'KeyL': e.preventDefault(); videoPlayer.currentTime += (e.shiftKey ? 0.04 : 1); break;
+            }
+        }
+        
+        // --- EVENT LISTENERS ---
+
+        ui.jsonUpload.addEventListener('change', handleFileUpload);
+        ui.clearDataBtn.addEventListener('click', () => { if (selectedGameIds.size > 0 && confirm(`Are you sure you want to permanently delete the ${selectedGameIds.size} selected game file(s)?`)) { allGamesData = allGamesData.filter(g => !selectedGameIds.has(g.id)); selectedGameIds.clear(); refreshUI(); } });
+        ui.teamFilter.addEventListener('click', (e) => { const button = e.target.closest('button'); if (button && button.dataset.team) { currentTeamFilter = button.dataset.team; selectedGameIds.clear(); renderTeamFilter(); renderGameList(); updateDashboard(); } });
+        ui.periodFilter.addEventListener('click', (e) => { const button = e.target.closest('button'); if (button && button.dataset.period) { currentPeriodFilter = button.dataset.period; ui.periodFilter.querySelectorAll('button').forEach(btn => btn.classList.remove('active')); button.classList.add('active'); updateDashboard(true); } });
+        ui.gameListContainer.addEventListener('click', e => { const toggleBtn = e.target.closest('.toggle-direction-btn'); if (toggleBtn) { const gameId = toggleBtn.dataset.id; const game = allGamesData.find(g => g.id === gameId); if (game) { game.gameDetails.attackDirection = (game.gameDetails.attackDirection === 'left') ? 'right' : 'left'; saveToStorage(); renderGameList(); if (selectedGameIds.has(game.id)) { updateDashboard(); } } return; } const linkBtn = e.target.closest('.link-video-btn'); if (linkBtn) { const gameId = linkBtn.dataset.id; document.getElementById('videoLinkUpload').dataset.linkingGameId = gameId; document.getElementById('videoLinkUpload').click(); return; } });
+        document.getElementById('videoLinkUpload').addEventListener('change', event => { const file = event.target.files[0]; const gameId = event.target.dataset.linkingGameId; if (file && gameId) { videoFileMap.set(gameId, file); renderGameList(); } event.target.value = ''; });
+        document.addEventListener('click', e => { if (e.target.matches('.close-modal-btn')) { const modal = e.target.closest('.modal'); if (modal.id === 'quickSyncModal') { quickSyncState.reject('Sync cancelled by user.'); } toggleModal(modal, false); }});
+        document.addEventListener('keydown', handleClipPlayerShortcuts);
+        ui.dashboardSelector.addEventListener('change', e => { currentDashboardId = e.target.value; renderCurrentDashboard(); });
+        ui.playerFilter.addEventListener('change', e => { currentPlayerFilter = e.target.value; updateDashboard(true); });
+        ui.manageDashboardsBtn.addEventListener('click', openDashboardManager);
+        ui.addNewDashboardBtn.addEventListener('click', startNewDashboard);
+        ui.saveDashboardLayoutBtn.addEventListener('click', saveCurrentDashboardLayout);
+        ui.deleteDashboardBtn.addEventListener('click', () => { if(editingDashboard && editingDashboard.id !== 'default' && confirm(`Delete dashboard "${editingDashboard.name}"?`)) { dashboards = dashboards.filter(d => d.id !== editingDashboard.id); saveDashboards(); currentDashboardId = 'default'; renderDashboardSelector(); openDashboardManager(); } });
+        ui.dashboardLayoutArea.addEventListener('click', e => { if (e.target.classList.contains('remove-widget-btn')) { e.target.closest('.widget-item').remove(); } });
+        
+        ui.selectAllBtn.addEventListener('click', () => {
+            const visibleCheckboxes = [...ui.gameListContainer.querySelectorAll('.game-item input[type="checkbox"]')];
+            if (visibleCheckboxes.length === 0) return;
+            const shouldSelectAll = visibleCheckboxes.some(cb => !cb.checked);
+            
+            visibleCheckboxes.forEach(cb => {
+                cb.checked = shouldSelectAll;
+                if (shouldSelectAll) {
+                    selectedGameIds.add(cb.dataset.id);
+                } else {
+                    selectedGameIds.delete(cb.dataset.id);
+                }
+            });
+            renderGameList();
+            updateDashboard();
+        });
+
+        let draggedItem = null;
+        document.addEventListener('dragstart', e => { if (e.target.matches('.widget-item')) { draggedItem = e.target; setTimeout(() => e.target.classList.add('dragging'), 0); }}); document.addEventListener('dragend', e => { if (e.target.matches('.widget-item')) { e.target.classList.remove('dragging'); }}); document.addEventListener('dragover', e => { const dropZone = e.target.closest('.drop-zone'); if (dropZone && draggedItem) { e.preventDefault(); const afterElement = [...dropZone.querySelectorAll('.widget-item:not(.dragging)')].reduce((closest, child) => { const box = child.getBoundingClientRect(); const offset = e.clientY - box.top - box.height / 2; return (offset < 0 && offset > closest.offset) ? { offset: offset, element: child } : closest; }, { offset: Number.NEGATIVE_INFINITY }).element; dropZone.querySelectorAll('.drop-zone').forEach(z => z.classList.remove('over')); dropZone.classList.add('over'); if (afterElement == null) { dropZone.appendChild(draggedItem); } else { dropZone.insertBefore(draggedItem, afterElement); } }}); document.addEventListener('dragleave', e => { const dropZone = e.target.closest('.drop-zone'); if (dropZone) { dropZone.classList.remove('over'); }}); document.addEventListener('drop', e => { const dropZone = e.target.closest('.drop-zone'); if (dropZone) { dropZone.classList.remove('over'); draggedItem = null; }});
+        let currentPanMap = { mapId: null, startX: 0, startY: 0, el: null };
+        document.body.addEventListener('mousedown', e => { const container = e.target.closest('.interactive-pitch-container'); if (!container || e.target.closest('button')) return; e.preventDefault(); const mapWidget = container.closest('[data-map-id]'); const mapId = mapWidget.dataset.mapId; const state = mapStates[mapId]; container.classList.add('panning'); const rect = container.querySelector('.pitch-aspect-box').getBoundingClientRect(); currentPanMap = { mapId, startX: e.clientX, startY: e.clientY, initialX: (state.transform.x_norm || 0) * rect.width, initialY: (state.transform.y_norm || 0) * rect.height, isVertical: state.isVertical, el: container }; document.addEventListener('mousemove', onPanMove); document.addEventListener('mouseup', onPanEnd, { once: true }); });
+        function onPanMove(e) { if (!currentPanMap.mapId) return; e.preventDefault(); const state = mapStates[currentPanMap.mapId]; const dx = e.clientX - currentPanMap.startX; const dy = e.clientY - currentPanMap.startY; const rect = currentPanMap.el.querySelector('.pitch-aspect-box').getBoundingClientRect(); if (rect.width === 0) return; let finalX = currentPanMap.initialX + (currentPanMap.isVertical ? dy : dx); let finalY = currentPanMap.initialY + (currentPanMap.isVertical ? -dx : dy); state.transform.x_norm = finalX / rect.width; state.transform.y_norm = finalY / rect.height; const mapWidget = currentPanMap.el.closest('[data-map-id]'); renderInteractiveMapContent(mapWidget.dataset.kpiKey, mapWidget.dataset.subType || null); }
+        function onPanEnd() { if (currentPanMap.el) currentPanMap.el.classList.remove('panning'); currentPanMap.mapId = null; document.removeEventListener('mousemove', onPanMove); }
+        document.body.addEventListener('wheel', e => { const container = e.target.closest('.interactive-pitch-container'); if (!container) return; e.preventDefault(); const mapWidget = container.closest('[data-map-id]'); const mapId = mapWidget.dataset.mapId; const state = mapStates[mapId]; const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1; state.transform.scale = Math.max(0.2, Math.min((state.transform.scale || 1) * factor, 20)); renderInteractiveMapContent(mapWidget.dataset.kpiKey, mapWidget.dataset.subType || null); }, { passive: false });
+        document.body.addEventListener('click', e => { const button = e.target.closest('button[data-action]'); if (button) { const mapWidget = button.closest('[data-map-id]'); const mapId = mapWidget.dataset.mapId; const kpiKey = mapWidget.dataset.kpiKey; const subType = mapWidget.dataset.subType || null; if (!mapStates[mapId]) return; const state = mapStates[mapId]; const action = button.dataset.action;
+            switch(action) { case 'toggle-view': const views = ['dots', 'heatmap', 'performance']; state.viewMode = views[(views.indexOf(state.viewMode) + 1) % views.length]; break; case 'rotate': state.isVertical = !state.isVertical; break; case 'zoom-in': state.transform.scale = Math.min(20, (state.transform.scale || 1) * 1.2); break; case 'zoom-out': state.transform.scale = Math.max(0.2, (state.transform.scale || 1) / 1.2); break; case 'reset': state.transform = { scale: 1, x_norm: 0, y_norm: 0}; state.isVertical = false; break; case 'set-heatmap-filter': state.heatmapFilter = button.dataset.filter; break; }
+            renderInteractiveMapContent(kpiKey, subType); return; }
+            const mapContainer = e.target.closest('.interactive-pitch-container:not(.panning)'); if(mapContainer) { const mapWidget = mapContainer.closest('[data-map-id]'); const kpiKey = mapWidget.dataset.kpiKey; const subType = mapWidget.dataset.subType || null; const transformLayer = mapContainer.querySelector('.pitch-transform-layer'); const rect = transformLayer.getBoundingClientRect(); const xPercent = (e.clientX - rect.left) / rect.width * 100; const yPercent = (e.clientY - rect.top) / rect.height * 100; findAndShowClips(kpiKey, subType, { x: xPercent, y: yPercent }); }
+        });
+        document.getElementById('quick-sync-set-1h').addEventListener('click', () => { const time = document.getElementById('quick-sync-video').currentTime; quickSyncState.firstHalf = time; document.getElementById('quick-sync-1h-display').textContent = time.toFixed(2) + 's'; if (quickSyncState.secondHalf) document.getElementById('quick-sync-save').disabled = false; });
+        document.getElementById('quick-sync-set-2h').addEventListener('click', () => { const time = document.getElementById('quick-sync-video').currentTime; quickSyncState.secondHalf = time; document.getElementById('quick-sync-2h-display').textContent = time.toFixed(2) + 's'; if (quickSyncState.firstHalf) document.getElementById('quick-sync-save').disabled = false; });
+        document.getElementById('quick-sync-save').addEventListener('click', () => { const game = allGamesData.find(g => g.id === quickSyncState.gameId); if (game) { const halfTimeMarker = game.events.find(ev => ev.label === "End of 1st Half"); game.sync = { firstHalfOffset: quickSyncState.firstHalf, secondHalfOffset: quickSyncState.secondHalf, halfTimeLoggerTime: halfTimeMarker ? timeToSeconds(halfTimeMarker.time) : (game.gameDetails.gameLength / 2 * 60) }; saveToStorage(); quickSyncState.resolve(); } else { quickSyncState.reject('Game not found after sync.'); } toggleModal(ui.quickSyncModal, false); });
+        
+        loadDashboards();
+        loadFromStorage();
+    });
+    </script>
+</body>
+</html>
